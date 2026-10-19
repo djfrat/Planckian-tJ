@@ -30,6 +30,21 @@ PotV0 = (float)( sys.argv[6])
 PotJa = (float)( sys.argv[7])  
 Kinb = (float)( sys.argv[8]) 
 
+# Optional diagnostic extension.  The default preserves the published scalar
+# charge-current calculation.  The proxy modes are for testing the two-current
+# response machinery only; {H,J}/2 is not the interacting t-J energy current.
+TransportOperatorMode = sys.argv[9] if len(sys.argv) > 9 else "charge"
+TransportEnergyScale = (float)(sys.argv[10]) if len(sys.argv) > 10 else 1.0
+if TransportOperatorMode not in ("charge", "energy_proxy", "sum_proxy"):
+    raise ValueError("transport operator must be charge, energy_proxy, or sum_proxy")
+if TransportEnergyScale <= 0:
+    raise ValueError("transport energy scale must be positive")
+TransportOperatorSuffix = "" if TransportOperatorMode == "charge" else "_op" + TransportOperatorMode + "_E" + str(TransportEnergyScale)
+if TransportOperatorMode != "charge":
+    print("# WARNING: using {H,J_charge}/(2 E*) diagnostic proxy, not the physical t-J energy current")
+    print("# WARNING: Drude and kinetic sum-rule outputs remain charge-current formulas and are not physical in proxy modes")
+    print("# transport operator =", TransportOperatorMode, "E* =", TransportEnergyScale)
+
 #PotH = (float)( sys.argv[9]) # update filenames
 
 
@@ -1040,6 +1055,25 @@ def CreateSparseDrudeMatrixKu(  ) :
     return scipy.sparse.coo_matrix( ( tmp , ( matI , matJ ) ) )
 
 
+def CreateSparseTransportMatrix( ham ) :
+    """Select the operator used by the scalar FTLM auto-spectrum path.
+
+    Running the program with modes charge, energy_proxy and sum_proxy produces
+    the three auto-spectra needed by the polarization identity.  The proxy is
+    normalized by TransportEnergyScale so it can be added to the charge
+    current in the code's dimensionless units.
+    """
+    charge = CreateSparseDrudeMatrixJu().tocsr()
+    if TransportOperatorMode == "charge":
+        return charge
+
+    energy_proxy = (ham @ charge + charge @ ham) * (0.5 / TransportEnergyScale)
+    energy_proxy = (energy_proxy + energy_proxy.T.conj()) * 0.5
+    if TransportOperatorMode == "energy_proxy":
+        return energy_proxy.tocsr()
+    return (charge + energy_proxy).tocsr()
+
+
 
 
 
@@ -1426,7 +1460,7 @@ def ComputeLanczosFiniteTConductivity( el   ) :
 #    EigenEnergies , EigenVectors , KrylovVectors = LanczosSparse( vec_r  , CreateSparseHamiltonian(  ) ) # -> 1st big matrix in memory (nb x RetainedLevels) + ham
 
     
-    Ju = CreateSparseDrudeMatrixJu()
+    Ju = CreateSparseTransportMatrix( ham )
     vec_jr= Ju.T.conj() @ vec_r
 #    print((numpy.exp(- beta * EigenEnergies / 2)).shape)
 #    print((KrylovVectors[ 0 , : ].conj()).shape)
@@ -1666,7 +1700,7 @@ def ComputeLanczosFiniteTConductivity( el   ) :
 
      
 #        namesuffix = "_" + str(t1x) + "_" + str(t1y)  + "_" + str(t2x) + "_" + str(t2y) + "_np" + str(np) + "_J" + str(PotJa) + "_V" + str(PotV0) + "_T" + str( numpy.round( 1./Beta , decimals = 4) ) + "_M" + str(RetainedLevels0)+ "_" + BoundaryConditions + "_" + TypeSpin + ".dat" 
-        namesuffix = "_np" + str(np) + "_T" + str( numpy.round( 1./Beta , decimals = 4) ) + Suffix 
+        namesuffix = TransportOperatorSuffix + "_np" + str(np) + "_T" + str( numpy.round( 1./Beta , decimals = 4) ) + Suffix
 
 
 
@@ -1701,7 +1735,7 @@ def ComputeLanczosFiniteTConductivity( el   ) :
 
     print("final Drude",Drudecumul1[0]/(el+1),Drudecumul2[0]/(el+1),Drudecumul[0]/(el+1))
 
-    WriteResults (BetaLine, Drudecumul, Drudecumul1, Drudecumul2 , Proxycumul , Zetacumul  , ( el + 1 )  , "drudeFTLM"  + "_np" + str(np)  + Suffix)      
+    WriteResults (BetaLine, Drudecumul, Drudecumul1, Drudecumul2 , Proxycumul , Zetacumul  , ( el + 1 )  , "drudeFTLM" + TransportOperatorSuffix + "_np" + str(np)  + Suffix)
 # }}}
 
 
@@ -2156,9 +2190,9 @@ if not FlagOnlyEnergies and not FlagOnlyHF and npp == 0 :
             sig_avgLoc_quenchedperp [ : ] = pippoperp / ( elemflux + 1 )
 
             if ED == False :
-                f = open( "sigwGCq-FTLM" + "_dens" + str('{0:.3g}'.format(dens)) + "_T" + str( numpy.round( 1./Beta , decimals = 4) ) + Suffix , 'w' )
+                f = open( "sigwGCq-FTLM" + TransportOperatorSuffix + "_dens" + str('{0:.3g}'.format(dens)) + "_T" + str( numpy.round( 1./Beta , decimals = 4) ) + Suffix , 'w' )
             else :
-                f = open( "sigwGCq-ED" + "_dens" + str('{0:.3g}'.format(dens)) + "_T" + str( numpy.round( 1./Beta , decimals = 4) ) + Suffix , 'w' )
+                f = open( "sigwGCq-ED" + TransportOperatorSuffix + "_dens" + str('{0:.3g}'.format(dens)) + "_T" + str( numpy.round( 1./Beta , decimals = 4) ) + Suffix , 'w' )
             
             sys.stdout = f
             for ele in numpy.arange( len( justhist ) ) :
@@ -2166,7 +2200,7 @@ if not FlagOnlyEnergies and not FlagOnlyHF and npp == 0 :
             sys.stdout = orig_stdout
             f.close()
 
-            f = open( "sigwperpGCq-FTLM" + "_dens" + str('{0:.3g}'.format(dens)) + "_T" + str( numpy.round( 1./Beta , decimals = 4) ) + Suffix , 'w' )
+            f = open( "sigwperpGCq-FTLM" + TransportOperatorSuffix + "_dens" + str('{0:.3g}'.format(dens)) + "_T" + str( numpy.round( 1./Beta , decimals = 4) ) + Suffix , 'w' )
             sys.stdout = f
             for ele in numpy.arange( len( justhist ) ) :
                 print( justbin_edges[ ele ] , sig_avgLoc_quenchedperp[ ele ] ) #prints left of interval
@@ -2185,9 +2219,9 @@ if not FlagOnlyEnergies and not FlagOnlyHF and npp == 0 :
             sig_avgLoc_quenched [ : ] = pippo / ( elemflux + 1 )
 
             if ED == False :
-                f = open( "sigwGC-FTLM" + "_dens" + str('{0:.3g}'.format(dens)) + "_T" + str( numpy.round( 1./Beta , decimals = 4) ) + Suffix , 'w' )
+                f = open( "sigwGC-FTLM" + TransportOperatorSuffix + "_dens" + str('{0:.3g}'.format(dens)) + "_T" + str( numpy.round( 1./Beta , decimals = 4) ) + Suffix , 'w' )
             else :
-                f = open( "sigwGC-ED" + "_dens" + str('{0:.3g}'.format(dens)) + "_T" + str( numpy.round( 1./Beta , decimals = 4) ) + Suffix , 'w' )
+                f = open( "sigwGC-ED" + TransportOperatorSuffix + "_dens" + str('{0:.3g}'.format(dens)) + "_T" + str( numpy.round( 1./Beta , decimals = 4) ) + Suffix , 'w' )
             
             sys.stdout = f
             for ele in numpy.arange( len( justhist ) ) :
